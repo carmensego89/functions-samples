@@ -1,0 +1,75 @@
+npm install openai cors express
+const functions = require("firebase-functions");
+const admin = require("firebase-admin");
+const { Configuration, OpenAIApi } = require("openai");
+const express = require("express");
+const cors = require("cors");
+
+admin.initializeApp();
+const db = admin.firestore();
+
+const app = express();
+app.use(cors({ origin: true }));
+app.use(express.json());
+
+const configuration = new Configuration({
+  apiKey: process.env.OPENAI_API_KEY, // Store securely in Firebase config
+});
+const openai = new OpenAIApi(configuration);
+
+// POST /chat
+app.post("/chat", async (req, res) => {
+  const { message, sessionId } = req.body;
+
+  if (!message) return res.status(400).send("No message provided");
+
+  try {
+    // Optional: Save message to Firestore
+    await db.collection("chat_sessions").doc(sessionId).collection("messages").add({
+      from: "user",
+      message,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Get response from GPT
+    const completion = await openai.createChatCompletion({
+      model: "gpt-4", // or "gpt-4o" if supported
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are an AI concierge for a digital marketing agency called Cima. Speak in a professional, helpful tone. Guide users, answer questions, and help them book a strategy session.",
+        },
+        {
+          role: "user",
+          content: message,
+        },
+      ],
+      max_tokens: 300,
+    });
+
+    const aiReply = completion.data.choices[0].message.content;
+
+    // Optional: Save AI response
+    await db.collection("chat_sessions").doc(sessionId).collection("messages").add({
+      from: "ai",
+      message: aiReply,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    res.status(200).send({ reply: aiReply });
+  } catch (err) {
+    console.error(err);
+    res.status(500).send("Error generating reply");
+  }
+});
+
+exports.aiChat = functions.https.onRequest(app);
+firebase functions:config:set openai.api_key="your-openai-key"
+fetch("https://us-central1-yourproject.cloudfunctions.net/aiChat", {
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: JSON.stringify({ message: "What services do you offer?", sessionId: "user123" }),
+})
+.then(res => res.json())
+.then(data => console.log(data.reply));
